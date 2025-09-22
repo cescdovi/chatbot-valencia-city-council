@@ -28,7 +28,7 @@ jobs:
           python -m pip install ruff pytest pytest-cov
 
       - name: Check linting
-        run: ruff check yt_neo4j_etl
+        run: ruff check etl_load
 
       # coverage: herramienta que permite medir qué % del código se ejecutó durante los tests.
       #   Puede tumbar el job si no se llega al mínimo definido (--cov-fail-under).
