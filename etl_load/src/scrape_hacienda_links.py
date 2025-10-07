@@ -5,9 +5,12 @@ from typing import Dict, List, Any, Optional
 import os
 from pathlib import Path
 from playwright.sync_api import Playwright, sync_playwright, TimeoutError as PlaywrightTimeoutError
-from config.setup_logging import setup_logging
+from pydantic import BaseModel, Field, HttpUrl, TypeAdapter # Importamos Pydantic
 
+from config.setup_logging import setup_logging
 from config.common_settings import settings
+from etl_load.src.neo4j_extractor import Neo4jExtractor, Neo4jConfig
+from etl_load.src.pydantic_model import AreaModel, CategoryModel, ProcedureModel, Areas
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -26,7 +29,8 @@ class Scraper:
     browser: Any = None
     page: Any = None
     results_dir: Path = field(default_factory=lambda: Path(settings.DATA_DIR) / "RESULTS.json")
-    results: Dict = field(default_factory=dict)
+    results: Areas = field(default_factory=lambda: Areas(areas=[])) 
+    db_neo4j:Neo4jExtractor = field(default_factory=lambda: Neo4jExtractor(Neo4jConfig()))
 
 
     def start(self) -> None:
@@ -35,6 +39,13 @@ class Scraper:
         self.browser = self.playwright.chromium.launch(headless=self.config.headless)
         self.page = self.browser.new_page()
         self.goto(settings.HACIENDA_URL)
+
+        try:
+            self.db_neo4j.connect()
+        except Exception as e:
+            logging.error(f"Could not connect to Neo4j: {e}")
+        
+
         logging.info(f"Landing URL: {self.page.url}")
     
     def close(self) -> None:
@@ -42,6 +53,8 @@ class Scraper:
         if self.browser:
             logging.info("Closing the browser...")
             self.browser.close()
+        if self.db_neo4j:
+            self.db_neo4j.close()
 
     def goto(self, url: str) -> None:
         """Navigate to a specified URL with error handling."""
@@ -75,38 +88,51 @@ class Scraper:
 
 
 
-    def scrape_category(self, area_title: str, category_name: str, category_url: str) -> None:
+    def scrape_category(self, area_title: str, area_index:int, category_name: str, category_url: str) -> None:
         if not category_url:
             logging.warning(f"Category without href under '{area_title}'")
             return
-
-        category_url = settings.BASE_URL + category_url
+        
+        full_category_url = settings.BASE_URL + category_url
         logging.info(f"Opening category: {category_name} -> {category_url}")
-        self.goto(category_url)
+        self.goto(full_category_url)
 
-        procedures = self.page.locator("div.txtProc")
-        total = procedures.count() #number of procedures
-        general_limit = max(0, total - 2) # Exclude last two (offices info)
+        current_category_data = {
+            "category_name": category_name,
+            "category_url": full_category_url,
+            "procedures": [] 
+        }
+        
+        procedures_list: List[ProcedureModel] = []
+        
+        raw_procedures = self.page.locator("div.txtProc")
+        total = raw_procedures.count()
+        general_limit = max(0, total - 2)
 
-        # extract general info (without offices info)
+        # 2. Extracción de información general
         for j in range(general_limit):
-            proc = procedures.nth(j)
+            proc = raw_procedures.nth(j)
             if proc.locator("div.rotuloDetalleProc").count():
-                procedure_title = proc.locator("div.rotuloDetalleProc").inner_text() #Descripcion, quien puede solicitar, etc
-                procedure_content = proc.locator("div.descWebProc p, div.descWebProc li") #contenido
-                content: List[str] = []
+                procedure_title = proc.locator("div.rotuloDetalleProc").inner_text()
+                procedure_content = proc.locator("div.descWebProc p, div.descWebProc li")
+                content_list: List[str] = []
                 for k in range(procedure_content.count()):
                     texts = procedure_content.nth(k).all_inner_texts()
                     for t in texts:
                         t = t.strip()
                         if t:
-                            content.append(t)
-                self.results[area_title]["procedures"].append({procedure_title: content})
-                logging.info(f"  Procedure: {procedure_title} ({len(content)} items)")
+                            content_list.append(t)
+                
+                # CREACIÓN Y VALIDACIÓN DEL MODELO PYDANTIC
+                procedures_list.append(ProcedureModel(
+                    title=procedure_title, 
+                    content=content_list
+                ))
+                logging.info(f"  Procedure: {procedure_title} ({len(content_list)} items)")
         
-        # extract info from offices
+        # 3. Extracción de información de oficinas
         for j in range(general_limit, total):
-            proc = procedures.nth(j)
+            proc = raw_procedures.nth(j)
             if proc.locator("div.rotuloDetalleProcSmall").count():
                 office_title = proc.locator("div.rotuloDetalleProcSmall").inner_text()
                 items = proc.locator("div.oficinasLista li")
@@ -115,28 +141,43 @@ class Scraper:
                     t = items.nth(m).inner_text().strip()
                     if t:
                         offices_info.append(t)
-                self.results[area_title]["procedures"].append({office_title: offices_info})
+                
+                # CREACIÓN Y VALIDACIÓN DEL MODELO PYDANTIC
+                procedures_list.append(ProcedureModel(
+                    title=office_title, 
+                    content=offices_info
+                ))
                 logging.info(f"  Offices: {office_title} ({len(offices_info)} items)")
+        
+        # 4. Asignar la lista de modelos de procedimientos
+        current_category_data["procedures"] = procedures_list
+        
+        # 5. CREACIÓN Y ASIGNACIÓN FINAL DEL MODELO PYDANTIC DE CATEGORÍA
+        try:
+            
+            category_model = CategoryModel(**current_category_data)
+            self.results.areas[area_index].categories.append(category_model)
+            logging.info(f"Category info '{category_name}' added to area '{area_title}'")
+        except Exception as e:
+            logging.error(f"Error validating Pydantic model for category '{category_name}': {e}")
 
         self.persist()
 
-        # back to hacienda base url
         self.back_to_base()
     
 
 
-    def scrape_area(self, index: int, areas_count: int) -> None:
+    def scrape_area(self, area_index: int, areas_count: int) -> None:
         areas = self.list_areas()
-        area = areas.nth(index)
+        area = areas.nth(area_index)
         area_title = area.locator("div.rotuloDetalleProc").inner_text()
-        logging.info(f"Processing area [{index+1}/{areas_count}]: {area_title}")
+        logging.info(f"Processing area [{area_index+1}/{areas_count}]: {area_title}")
 
         # initialize area in results
-        self.results.setdefault(area_title, {})
-        self.results[area_title].setdefault("category_name", "")
-        self.results[area_title].setdefault("category_url", "")
-        self.results[area_title].setdefault("procedures", [])
-        # expandir y listar categorías
+        new_area_model = AreaModel(area_title=area_title, categories=[])
+        self.results.areas.append(new_area_model)
+        
+        # expand area and list categories
         self.expand_area(area)
         categories = self.list_categories_in_area(area)
         categories_count = categories.count()
@@ -145,23 +186,20 @@ class Scraper:
             return
 
         logging.info(f"{categories_count} categories found in area '{area_title}'")
-        for c in range(categories_count):
-            cat = categories.nth(c)
+        for category_index in range(categories_count):
+            cat = categories.nth(category_index)
             category_name = (cat.inner_text()).strip()
             category_url = cat.get_attribute("href")
             
-            self.results[area_title]['category_name'] = category_name
-            self.results[area_title]['category_url'] = settings.BASE_URL+category_url
-
-            self.persist()
+        
             # scrape each category of the area
-            self.scrape_category(area_title, category_name, category_url)
+            self.scrape_category(area_title, area_index, category_name, category_url)
 
     def persist(self) -> None:
         """Store results to a JSON file."""
         os.makedirs(self.results_dir.parent, exist_ok=True)
         with open(self.results_dir, "w", encoding="utf-8") as f:
-            json.dump(self.results, f, indent=4, ensure_ascii=False)
+            f.write(self.results.model_dump_json(indent=2))
 
 
 
@@ -187,14 +225,3 @@ class Scraper:
 with sync_playwright() as pw:
     scraper = Scraper(pw)
     scraper.run()
-
-
-
-
-    
-
-
-    
-
-
-
