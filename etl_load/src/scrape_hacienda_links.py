@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, HttpUrl, TypeAdapter # Importamos Pydanti
 
 from config.setup_logging import setup_logging
 from config.common_settings import settings
-from etl_load.src.neo4j_extractor import Neo4jExtractor, Neo4jConfig
+from etl_load.src.neo4j_loader import Neo4jLoader, Neo4jConfig
 from etl_load.src.pydantic_model import AreaModel, CategoryModel, ProcedureModel, Areas
 
 setup_logging()
@@ -30,7 +30,7 @@ class Scraper:
     page: Any = None
     results_dir: Path = field(default_factory=lambda: Path(settings.DATA_DIR) / "RESULTS.json")
     results: Areas = field(default_factory=lambda: Areas(areas=[])) 
-    db_neo4j:Neo4jExtractor = field(default_factory=lambda: Neo4jExtractor(Neo4jConfig()))
+    db_neo4j:Neo4jLoader = field(default_factory=lambda: Neo4jLoader(Neo4jConfig()))
 
 
     def start(self) -> None:
@@ -85,7 +85,6 @@ class Scraper:
 
     def list_categories_in_area(self, area):
         return area.locator("div.cuerpoBusquedaProc a")
-
 
 
     def scrape_category(self, area_title: str, area_index:int, category_name: str, category_url: str) -> None:
@@ -151,13 +150,23 @@ class Scraper:
         
         # 4. Asignar la lista de modelos de procedimientos
         current_category_data["procedures"] = procedures_list
+    
+        try:
+            self.db_neo4j._save_procedure_to_neo4j(area_title,
+                                                   category_name,
+                                                   procedures_list)
+        
+        except Exception as e:
+            logging.error(f"Failed to save procedure '{category_name}' to Neo4j: {e}") 
+
         
         # 5. CREACIÓN Y ASIGNACIÓN FINAL DEL MODELO PYDANTIC DE CATEGORÍA
         try:
             
             category_model = CategoryModel(**current_category_data)
             self.results.areas[area_index].categories.append(category_model)
-            logging.info(f"Category info '{category_name}' added to area '{area_title}'")
+            #logging.info(f"Category info '{category_name}' added to area '{area_title}'")
+            logging.info(f"Category info '{category_name}' added")
         except Exception as e:
             logging.error(f"Error validating Pydantic model for category '{category_name}': {e}")
 
@@ -176,7 +185,10 @@ class Scraper:
         # initialize area in results
         new_area_model = AreaModel(area_title=area_title, categories=[])
         self.results.areas.append(new_area_model)
-        
+
+        # save area to Neo4j immediately
+        self.db_neo4j._save_area_to_neo4j(new_area_model.area_title)
+
         # expand area and list categories
         self.expand_area(area)
         categories = self.list_categories_in_area(area)
@@ -190,8 +202,11 @@ class Scraper:
             cat = categories.nth(category_index)
             category_name = (cat.inner_text()).strip()
             category_url = cat.get_attribute("href")
+
+            self.db_neo4j._save_category_to_neo4j(new_area_model.area_title,
+                                                  category_name,
+                                                  category_url)
             
-        
             # scrape each category of the area
             self.scrape_category(area_title, area_index, category_name, category_url)
 
@@ -221,6 +236,8 @@ class Scraper:
             logging.exception(f"An unexpected error occurred: {e}")
         finally:
             self.close()
+    
+
        
 with sync_playwright() as pw:
     scraper = Scraper(pw)
