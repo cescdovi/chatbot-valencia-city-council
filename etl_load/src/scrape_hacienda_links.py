@@ -239,6 +239,9 @@ class Scraper:
     
 
        
-with sync_playwright() as pw:
-    scraper = Scraper(pw)
-    scraper.run()
+def scrape_hacienda_links(headless: bool = True):
+    config = ScraperConfig(headless=headless)
+    with sync_playwright() as pw:
+        scraper = Scraper(pw, config=config)
+        scraper.run()
+        return 

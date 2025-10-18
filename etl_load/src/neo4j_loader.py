@@ -41,18 +41,20 @@ class Neo4jLoader:
             logging.info("Neo4j connection closed.")
             self._driver = None
     
-    def run_query(self, query: str, parameters: dict = None) -> list:
-        """Run a Cypher query and return the results."""
+    def run_read(self, query: str, parameters: dict = None) -> list[dict]:
         if self._driver is None:
             raise RuntimeError("Neo4j driver is not connected. Call connect() first.")
-        
-        with self._driver.session(database = self.config.database) as session:
-            try:
-                result = session.run(query, parameters)
-            
-            except Exception as e:
-                logging.error(f"Error running query: {e}")
-                raise
+        with self._driver.session(database=self.config.database) as session:
+            return session.execute_read(lambda tx: tx.run(query, parameters or {}).data())
+
+    def run_write(self, query: str, parameters: dict = None):
+        if self._driver is None:
+            raise RuntimeError("Neo4j driver is not connected. Call connect() first.")
+        with self._driver.session(database=self.config.database) as session:
+            return session.execute_write(lambda tx: tx.run(query, parameters or {}).consume())
+
+
+    
     def _save_area_to_neo4j(self, 
                             area_title: str
                             ) -> None:
@@ -62,10 +64,10 @@ class Neo4jLoader:
         cypher_query = """
         MERGE (a: Area {nombre: $area_title})
         """
-        params = {"area_title": area_title}
+        parameters = {"area_title": area_title}
         
         try:
-            self.run_query(cypher_query, params)
+            self.run_write(cypher_query, parameters)
             logging.info(f"Area '{area_title}' saved to Neo4j.")
         except Exception as e:
             logging.error(f"Failed to save area '{area_title}' to Neo4j: {e}")
@@ -80,19 +82,19 @@ class Neo4jLoader:
         """
         cypher_query = """
         MATCH (a:Area {nombre: $area_title})
-        MERGE (c:Category {nombre: $nombre})
+        MERGE (c:Categoria {nombre: $nombre})
         ON CREATE SET c.url = $url
         MERGE (a)-[:TIENE_CATEGORIA]->(c)
         """
 
-        params = {
+        parameters = {
             "area_title": area_title,
             "nombre": category_name,
             "url": category_url
 
             }
         try:
-            self.run_query(cypher_query, params)
+            self.run_write(cypher_query, parameters)
             logging.info(f"Category '{category_name}' saved to Neo4j.")
 
         except Exception as e:
@@ -111,7 +113,7 @@ class Neo4jLoader:
 
         cypher_query = """
         // 1. Matchear el area y categoria correspondiente
-        MATCH (a:Area {nombre: $area_title})-[:TIENE_CATEGORIA]->(c:Category {nombre: $category_name})
+        MATCH (a:Area {nombre: $area_title})-[:TIENE_CATEGORIA]->(c:Categoria {nombre: $category_name})
 
         // 2. Iterar sobre la lista de procedures (list of dicts)
         WITH c, $procedures_list_of_dicts AS list
@@ -126,27 +128,65 @@ class Neo4jLoader:
 
         """
 
-        params = {
+        parameters = {
             "area_title": area_title,
             "category_name": category_name,
             "procedures_list_of_dicts": procedures_list_of_dicts,
             }
         try:
-            self.run_query(cypher_query, params)
+            self.run_write(cypher_query, parameters)
             logging.info(f"Procedure '{category_name}' saved to Neo4j.")
 
         except Exception as e:
             logging.error(f"Failed to save procedure '{category_name}' to Neo4j: {e}")
     
-# if __name__ == "__main__":
-#     config = Neo4jConfig()
-#     loader = Neo4jLoader(config)
-#     try:
-#         loader.connect()
-#         loader.run_query("""
-#                         MATCH (n) DETACH DELETE n
-#                         """)
-#         logger.info("CONNECTED SUCCESFULLY")
-#     except Exception as e:
-#         logger.error(f"Error {e}")
+    def set_common_label(self):
+        """
+        Set a common label for all entities in the graph named "Node"
+        to build a unique index for the graph.
+        This is done to avoid having to create a unique index for each entity type.
+        """
+
+        try:
+            self.connect()
+            self.run_write(
+                """
+                MATCH (n)
+                WHERE any(lbl IN labels(n) WHERE lbl IN [
+                'Area','Categoria','Procedimiento'
+                ])
+                SET n:CommonLabel;
+                """
+            )
+            self.close()
+        
+        except Exception as e:
+            logging.error(f"Failed generating a common label for all nodes: {e}")
+    
+            
+      
+    
+if __name__ == "__main__":
+    config = Neo4jConfig()
+    loader = Neo4jLoader(config)
+    try:
+        loader.connect()
+        loader.run_write("""
+                        MATCH (n) DETACH DELETE n
+                        """)
+
+#         # loader.set_common_label()
+#         # records = loader.run_read("""
+#         #                           MATCH (n:CommonLabel)
+#         #                           WHERE n.embedding IS NULL
+#         #                           RETURN labels(n) AS labels, properties(n) AS props
+#         #                         """)
+#         # logger.info(f"----type{type(records)}")
+#         # logger.info(f"----RECORDS: {records[0]}----")
+#         # logger.info("\n")
+#         # logger.info(f"----RECORDS: {records[1]}----")
+        logger.info("CONNECTED SUCCESFULLY")
+        
+    except Exception as e:
+        logger.error(f"Error {e}")
         
