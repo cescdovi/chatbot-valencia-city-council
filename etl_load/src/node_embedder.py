@@ -15,34 +15,37 @@ class NodeEmbedder:
         self.embedding_generator = OpenAIEmbeddingsGenerator()
 
     def compute_embeddings_for_all_nodes(self):
-        self.db.connect()
+        try: 
+            self.db.connect()
+            logging.info("Computing embeddings for all nodes without embeddings...")
+            query = """
+                    MATCH (n:CommonLabel)
+                    WHERE n.embedding IS NULL
+                    RETURN elementId(n) AS eid, labels(n) AS labels, properties(n) AS props
+            
+            """
+            results = self.db.run_read(query)
+            
+            for r in results:
+                eid = r.get("eid")
+                clean_text = self._clean_text(r)
+                logger.info(f"---{clean_text}---")
+                vector = self.embedding_generator.embed_query(clean_text)
+                self.db.run_write(
+                    """
+                    MATCH (n) WHERE elementId(n) = $id
+                    SET n.embedding = $vector
+                    """,
+                    parameters = {
+                    "id": eid, 
+                    "vector": vector
+                }
+                )
 
-        query = """
-                MATCH (n:CommonLabel)
-                WHERE n.embedding IS NULL
-                RETURN elementId(n) AS eid, labels(n) AS labels, properties(n) AS props
-        
-        """
-        results = self.db.run_read(query)
-        
-        for r in results:
-            eid = r.get("eid")
-            clean_text = self._clean_text(r)
-            logger.info(f"---{clean_text}---")
-            vector = self.embedding_generator.embed_query(clean_text)
-            self.db.run_write(
-                """
-                MATCH (n) WHERE elementId(n) = $id
-                SET n.embedding = $vector
-                """,
-                parameters = {
-                "id": eid, 
-                "vector": vector
-            }
-            )
 
-
-        self.db.close()
+            self.db.close()
+        except Exception as e:
+            logging.error(f"Error computing embeddings for nodes: {e}")
 
     def _clean_text(self, res:Dict):
         """
@@ -77,6 +80,23 @@ class NodeEmbedder:
         else:
             clean_result = label_text  
         return clean_result
+    
+    def create_common_index(self):
+        """
+        Create vector index over embeddings for all entities (label Entity)
+        """
+        self.db.connect()
+        self.db.run_write("""
+                          CREATE VECTOR INDEX entity_emb IF NOT EXISTS
+                          FOR (n:Entity) ON (n.embedding)
+                          OPTIONS {
+                            indexConfig: {
+                                            `vector.dimensions`: 1536,
+                                            `vector.similarity_function`: 'cosine'
+                                }};
+        """)
+        self.db.close()
+
 
 # node_embbeder = NodeEmbedder()
 # node_embbeder.compute_embeddings_for_all_nodes()

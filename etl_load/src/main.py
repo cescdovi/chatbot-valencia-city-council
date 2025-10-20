@@ -15,11 +15,14 @@ def main():
 
     config = Neo4jConfig()
     loader = Neo4jLoader(config)
+
+    #loader.create_constraints()
     loader.set_common_label()
 
     #generate embeddings for all nodes
     node_embbeder = NodeEmbedder()
     node_embbeder.compute_embeddings_for_all_nodes()
+    node_embbeder.create_common_index()
 
 
 if __name__ == "__main__":
