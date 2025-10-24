@@ -54,14 +54,23 @@ async def chat(request: ChatRequest):
     """
     try:
         async def response_generator():
-            user_input = request[-1].content
+            user_input = request.messages[-1].content
             try: 
-                async for ev in AGENT.astream_events({"input": user_input}, version="v1"):
-                    logging.info(f"Event generated: {ev}")
-                    yield json.dumps(ev) + "\n"
+                logging.info(f"---RECEIVED USER INPUT: {user_input}---")
+                async for ev in AGENT.astream_events({"input": user_input}):
+                    data = ev.get("data", {}) or {}
+                    if ev.get("type") == "data":
+
+                        logging.info(f"Event generated: {ev} \n")
+
+                        yield "\n"
+                        #yield json.dumps(ev) + "\n"
+
+
             except Exception as e:
                 logging.error(f"Error during agent response generation: {e}")
                 yield json.dumps({"error": str(e)}) + "\n"
+                
             
         return StreamingResponse(
             response_generator(),

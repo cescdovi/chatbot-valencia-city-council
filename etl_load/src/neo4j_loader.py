@@ -5,7 +5,6 @@ from typing import List, Dict, Any
 from config.common_settings import settings
 from config.setup_logging import setup_logging
 
-from etl_load.src.pydantic_model import Areas
 from etl_load.src.pydantic_model import AreaModel, CategoryModel, ProcedureModel, Areas
 
 setup_logging()
@@ -62,7 +61,7 @@ class Neo4jLoader:
         Save a single Area to Neo4j"
         """
         cypher_query = """
-        MERGE (a: Area {nombre: $area_title})
+        MERGE (a:Area {nombre: $area_title})
         """
         parameters = {"area_title": area_title}
         
@@ -84,6 +83,7 @@ class Neo4jLoader:
         MATCH (a:Area {nombre: $area_title})
         MERGE (c:Categoria {nombre: $nombre})
         ON CREATE SET c.url = $url
+        ON MATCH  SET c.url = $url
         MERGE (a)-[:TIENE_CATEGORIA]->(c)
         """
 
@@ -140,28 +140,28 @@ class Neo4jLoader:
         except Exception as e:
             logging.error(f"Failed to save procedure '{category_name}' to Neo4j: {e}")
     
-    def set_common_label(self):
-        """
-        Set a common label for all entities in the graph named "Node"
-        to build a unique index for the graph.
-        This is done to avoid having to create a unique index for each entity type.
-        """
+    # def set_common_label(self):
+    #     """
+    #     Set a common label for all entities in the graph named "Node"
+    #     to build a unique index for the graph.
+    #     This is done to avoid having to create a unique index for each entity type.
+    #     """
 
-        try:
-            self.connect()
-            self.run_write(
-                """
-                MATCH (n)
-                WHERE any(lbl IN labels(n) WHERE lbl IN [
-                'Area','Categoria','Procedimiento'
-                ])
-                SET n:CommonLabel;
-                """
-            )
-            self.close()
+    #     try:
+    #         self.connect()
+    #         self.run_write(
+    #             """
+    #             MATCH (n)
+    #             WHERE any(lbl IN labels(n) WHERE lbl IN [
+    #             'Area','Categoria','Procedimiento'
+    #             ])
+    #             SET n:CommonLabel;
+    #             """
+    #         )
+    #         self.close()
         
-        except Exception as e:
-            logging.error(f"Failed generating a common label for all nodes: {e}")
+    #     except Exception as e:
+    #         logging.error(f"Failed generating a common label for all nodes: {e}")
     
             
       
@@ -171,9 +171,10 @@ if __name__ == "__main__":
     loader = Neo4jLoader(config)
     try:
         loader.connect()
-        loader.run_write("""
-                        MATCH (n) DETACH DELETE n
-                        """)
+        # loader.run_write("""
+        #                 MATCH (n) DETACH DELETE n
+        #                 """)
+
 
 #         # loader.set_common_label()
 #         # records = loader.run_read("""

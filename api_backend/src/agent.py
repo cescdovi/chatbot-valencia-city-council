@@ -10,7 +10,7 @@ from langchain.chains import RetrievalQA
 
 from config.common_settings import settings
 from api_backend.src.agent_prompt import SYSTEM_AGENT_PROMPT, HUMAN_AGENT_PROMPT
-
+import logging
 # define LLM for as the agent brain
 llm = ChatOpenAI(
     model=settings.LLM_MODEL,
@@ -30,10 +30,10 @@ vectorstore = Neo4jVector.from_existing_graph(
     username=settings.DATABASE_NEO4J_USER,
     password=settings.DATABASE_NEO4J_PASSWORD,
     database=settings.DATABASE_NEO4J_NAME,
-    index_name="entity_emb",
+    index_name="emb_index",
     embedding=embeddings_function,
-    node_label="Entity",
-    text_node_properties=["text"],
+    node_label="CommonLabel",
+    text_node_properties=["nombre"],
     embedding_node_property="embedding",
 )
 
@@ -55,7 +55,9 @@ qa = RetrievalQA.from_chain_type(
 def neo4j_query(query: str) -> str:
     """Realiza una búsqueda semántica en la base de datos Neo4j usando embeddings para encontrar nodos relevantes y genera una respuesta contextual basada en esos datos."""
     result = qa.invoke({"query": query})
+    logging.info(f"Neo4j query tool invoked with query: {query}")
     return {
+        "result_keys": result.keys(),
         "result": result["result"],
         "source_documents": [doc.page_content for doc in result["source_documents"]],
     }
@@ -73,7 +75,7 @@ agent_runnable = create_tool_calling_agent(
     llm,
     tools,
     AGENT_PROMPT,
-    # handle_parsing_errors=True,  # force agent to use tools
+    #handle_parsing_errors=True,  # force agent to use tools
 )
 
 # engine that really call tools and manage the conversation

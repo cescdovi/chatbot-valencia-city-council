@@ -22,7 +22,7 @@ def main():
     #generate embeddings for all nodes
     node_embbeder = NodeEmbedder()
     node_embbeder.compute_embeddings_for_all_nodes()
-    node_embbeder.create_common_index()
+    node_embbeder.create_vector_index()
 
 
 if __name__ == "__main__":
