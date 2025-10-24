@@ -11,36 +11,52 @@ logger = logging.getLogger(__name__)
 
 class NodeEmbedder:
     def __init__(self):
-        self.db = Neo4jLoader(Neo4jConfig)
+        self.db = Neo4jLoader(Neo4jConfig())
         self.embedding_generator = OpenAIEmbeddingsGenerator()
 
-    def compute_embeddings_for_all_nodes(self):
+    def compute_embeddings_for_procedure_node(self):
         try: 
             self.db.connect()
-            logging.info("Computing embeddings for all nodes without embeddings...")
+            logging.info("Computing embeddings for procedures...")
             query = """
-                    MATCH (n:CommonLabel)
-                    WHERE n.embedding IS NULL
-                    RETURN elementId(n) AS eid, labels(n) AS labels, properties(n) AS props
-            
+            MATCH (p:Procedimiento)
+            WHERE p.embedding IS NULL
+            OPTIONAL MATCH (c:Categoria)-[:TIENE_PROCEDIMIENTO]->(p)
+            OPTIONAL MATCH (a:Area)-[:TIENE_CATEGORIA]->(c)
+            WITH p, 
+                coalesce(a.nombre, '')      AS area,
+                coalesce(c.nombre, '')      AS categoria,
+                coalesce(p.nombre, '')      AS nombre,
+                coalesce(p.descripcion, '') AS descripcion
+            WITH p,
+                'Área: ' + area + '\n' +
+                'Categoría: ' + categoria + '\n' +
+                'Procedimiento: ' + nombre + '\n' +
+                'Descripción del procedimiento: ' + descripcion AS texto
+            RETURN elementId(p) AS eid,
+                labels(p)    AS labels,
+                properties(p) AS props,
+                texto        AS embedding_text
             """
+
             results = self.db.run_read(query)
             
             for r in results:
                 eid = r.get("eid")
-                clean_text = self._clean_text(r)
-                logger.info(f"---{clean_text}---")
-                vector = self.embedding_generator.embed_query(clean_text)
-                self.db.run_write(
-                    """
-                    MATCH (n) WHERE elementId(n) = $id
-                    SET n.embedding = $vector
-                    """,
-                    parameters = {
-                    "id": eid, 
-                    "vector": vector
-                }
-                )
+                logging.info(f"---TEXTO FOR EMBEDDINGS---: {r}")
+                # clean_text = self._clean_text(r)
+                # logger.info(f"---{clean_text}---")
+                # vector = self.embedding_generator.embed_query(clean_text)
+                # self.db.run_write(
+                #     """
+                #     MATCH (n) WHERE elementId(n) = $id
+                #     SET n.embedding = $vector
+                #     """,
+                #     parameters = {
+                #     "id": eid, 
+                #     "vector": vector
+                # }
+                # )
 
 
             self.db.close()
@@ -81,25 +97,33 @@ class NodeEmbedder:
             clean_result = label_text  
         return clean_result
     
-    def create_common_index(self):
+    
+    def create_vector_index(self):
         """
         Create vector index over embeddings for all entities (label Entity)
         """
-        self.db.connect()
-        self.db.run_write("""
-                          CREATE VECTOR INDEX entity_emb IF NOT EXISTS
-                          FOR (n:Entity) ON (n.embedding)
-                          OPTIONS {
-                            indexConfig: {
-                                            `vector.dimensions`: 1536,
-                                            `vector.similarity_function`: 'cosine'
-                                }};
-        """)
-        self.db.close()
+        try:
+            self.db.connect()
+
+            self.db.run_write("""
+                              CREATE VECTOR INDEX emb_index IF NOT EXISTS
+                                FOR (p:Procedimiento) ON (p.embedding)
+                                OPTIONS {
+                                indexConfig: {
+                                    `vector.dimensions`: 1536,
+                                    `vector.similarity_function`: 'cosine'
+                                }
+                                };
+            """)
+            logging.info("Vector index 'emb_index' created successfully.")
+
+            self.db.close()
+        except Exception as e:
+            logging.error(f"Error creating vector index: {e}")
 
 
-# node_embbeder = NodeEmbedder()
-# node_embbeder.compute_embeddings_for_all_nodes()
+node_embbeder = NodeEmbedder()
+node_embbeder.compute_embeddings_for_all_nodes()
 
 
         
