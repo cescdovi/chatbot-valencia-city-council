@@ -1,4 +1,4 @@
 CHATBOT_VLC_VENV/
 notebooks/
 *.ipynb
-.env
+.env__pycache__/
