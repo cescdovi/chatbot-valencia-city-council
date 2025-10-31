@@ -11,19 +11,20 @@ def main():
     setup_logging()
     log = logging.getLogger(__name__)
 
-    scrape_hacienda_links()
+    #scrape_hacienda_links()
 
-    config = Neo4jConfig()
-    loader = Neo4jLoader(config)
+    # config = Neo4jConfig()
+    # loader = Neo4jLoader(config)
 
     #loader.create_constraints()
-    loader.set_common_label()
+    #loader.set_common_label()
 
-    #generate embeddings for all nodes
+    # #generate embeddings for all nodes
     node_embbeder = NodeEmbedder()
-    node_embbeder.compute_embeddings_for_all_nodes()
+    node_embbeder.compute_embeddings_for_procedure_nodes()
     node_embbeder.create_vector_index()
 
 
 if __name__ == "__main__":
+
     main()

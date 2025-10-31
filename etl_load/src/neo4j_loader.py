@@ -110,7 +110,12 @@ class Neo4jLoader:
         Save a category into Neo4j
         """
         procedures_list_of_dicts = [p.model_dump() for p in procedures_list]
+        
+        # Convert list of content lists into list of joined strings
+        for item in procedures_list_of_dicts:
+            item['content'] = '. '.join(item['content'])
 
+        logging.info(f"---Procedures to save---: {procedures_list_of_dicts}")
         cypher_query = """
         // 1. Matchear el area y categoria correspondiente
         MATCH (a:Area {nombre: $area_title})-[:TIENE_CATEGORIA]->(c:Categoria {nombre: $category_name})
